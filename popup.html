@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>YouTube Learning Assistant</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      margin: 0;
+      padding: 18px 18px 14px 18px;
+      background: #fff;
+      min-width: 220px;
+      min-height: 80px;
+      color: #222;
+    }
+    #start-btn {
+      display: block;
+      width: 100%;
+      padding: 12px 0;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: background 0.2s;
+    }
+    #start-btn:hover {
+      background: #1746a2;
+    }
+    h2 {
+      font-size: 18px;
+      margin: 0 0 10px 0;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+    }
+    h2 span {
+      font-size: 20px;
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h2><span>🧠</span>TubeAI</h2>
+  <button id="start-btn">Start Assistant</button>
+  <div id="status" style="margin-top:10px;font-size:14px;color:#2563eb;"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
