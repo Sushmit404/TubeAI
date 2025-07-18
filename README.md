@@ -1,14 +1,7 @@
 # TubeAI - YouTube Learning Assistant
 
-A Chrome extension that enhances your YouTube learning experience by providing AI-powered explanations, quizzes, and learning paths when you pause videos.
+A Chrome extension that enhances your YouTube learning experience by providing AI-powered answers to anything you want from a youtube video. 
 
-## Features
-
-- **AI-Powered Explanations**: Get comprehensive explanations of video topics when you pause
-- **Interactive Quizzes**: Test your understanding with generated quiz questions
-- **Learning Paths**: Get personalized learning recommendations
-- **Transcript Analysis**: Chat with the AI about video content using full transcripts
-- **Performance Tracking**: Monitor AI response times and success rates
 
 ## Setup Instructions
 
