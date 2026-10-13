@@ -19,10 +19,12 @@ Node can `require()` them while Chrome loads them as classic scripts.
 
 ## Data flow for one typed question
 
-1. The user types into the overlay and presses Enter. `content.js` takes the
-   transcript lines nearest the current playback time, up to 12,000
-   characters, formatted as `[m:ss] text`.
-2. It sends `{type:'ask', requestId, question, transcript, history:last 6}`
+1. The user types into the overlay and presses Enter. `content.js` reads
+   `video.currentTime` and builds a window of every transcript line within
+   ±60s of it, as `[m:ss] text`. If that's over 6,000 characters, the lines
+   farthest from the current time are dropped first. An empty window is
+   never sent.
+2. It sends `{type:'ask', requestId, question, windowText, currentTime, history}`, with history capped at 3 turns,
    to the background through `sendWithRetry()`, which allows 35s and retries
    once if the port closes or the reply times out. The input and Ask button
    are locked while it waits.
@@ -48,8 +50,11 @@ Clicking a suggestion and a settled pause both go through the same `ask()`.
 | Location | `mini-tubeai/` folder; the old TubeAI files are left alone |
 | Model | `gpt-4`. Override it from the service worker console: `chrome.storage.local.set({model:'gpt-4o-mini'})` |
 | OpenAI params | temperature 0.3, max_tokens 600 |
-| Transcript cap | 12,000 chars, applied in both content and background |
-| History | 20 messages kept per video in memory; the last 6 (3 turns) sent; each capped at 2,000 chars |
+| Transcript entries | `{startSec, endSec, text}`; `endSec` = start + caption duration |
+| Question window | ±60s around `video.currentTime`, clipped (not shifted) at the start and end of the video, capped at 6,000 chars. The background also caps it at 12,000 |
+| No captions or transcript failed | Message in the overlay, input and Ask button disabled. The background also refuses an empty `windowText` (`no_transcript`) |
+| History | 3 turns (6 messages) kept per video in memory, all sent; each capped at 2,000 chars |
+| System prompt | Answer from the excerpt; if it isn't there, say so plainly, then optionally give a short general answer labelled as not from the video |
 | Transcript source | Inline `<script>` on first load; otherwise fetch the `/watch?v=ID` HTML and parse `ytInitialPlayerResponse` |
 | Caption track | Manual English, then auto-generated English, then any manual track, then the first track |
 | Segments | 30s, indexed by `floor(t/30)` |

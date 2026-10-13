@@ -7,9 +7,9 @@
 const SEGMENT_SECONDS = 30;
 const PAUSE_DEBOUNCE_MS = 800;
 const PAUSE_WINDOW_SECONDS = 60;
-const QUESTION_WINDOW_CHARS = 12000;
-const HISTORY_SENT = 6;      // messages sent per request (3 turns)
-const HISTORY_KEPT = 20;     // messages kept in memory per video
+const QUESTION_WINDOW_SECONDS = 60; // +/- around video.currentTime
+const WINDOW_MAX_CHARS = 6000;      // ~2 min of speech is ~2-3k chars; this is headroom
+const MAX_TURNS = 3;                // question/answer pairs kept per video and sent
 const MESSAGE_TIMEOUT_MS = 35000;
 const STATS_FLUSH_MS = 10000;
 const AUTO_EXPLAIN_ON_PAUSE = true;
@@ -133,16 +133,19 @@ function pickTrack(tracks) {
     tracks.find((t) => !asr(t)) || tracks[0] || null;
 }
 
-// json3 -> [{ start, dur, text }] (seconds)
+// json3 -> [{ startSec, endSec, text }]
 function parseJson3(data) {
   const events = (data && data.events) || [];
   return events
     .filter((e) => Array.isArray(e.segs))
-    .map((e) => ({
-      start: (e.tStartMs || 0) / 1000,
-      dur: (e.dDurationMs || 0) / 1000,
-      text: e.segs.map((s) => s.utf8 || '').join('').replace(/\s+/g, ' ').trim(),
-    }))
+    .map((e) => {
+      const startSec = (e.tStartMs || 0) / 1000;
+      return {
+        startSec,
+        endSec: startSec + (e.dDurationMs || 0) / 1000,
+        text: e.segs.map((s) => s.utf8 || '').join('').replace(/\s+/g, ' ').trim(),
+      };
+    })
     .filter((e) => e.text);
 }
 
@@ -181,38 +184,38 @@ function fmtTime(sec) {
 }
 
 const segmentOf = (t) => Math.max(0, Math.floor(t / SEGMENT_SECONDS));
-const line = (e) => `[${fmtTime(e.start)}] ${e.text}`;
+const line = (e) => `[${fmtTime(e.startSec)}] ${e.text}`;
 
 function windowAround(entries, center, halfSeconds) {
-  return entries.filter((e) => e.start >= center - halfSeconds && e.start <= center + halfSeconds)
+  return entries.filter((e) => e.startSec >= center - halfSeconds && e.startSec <= center + halfSeconds)
     .map(line).join('\n');
 }
 
-// Grow outward from the line nearest `center` until maxChars is reached.
-function centeredWindow(entries, center, maxChars) {
-  if (!entries.length) return '';
-  let mid = 0;
-  while (mid < entries.length - 1 && entries[mid + 1].start <= center) mid++;
-  const picked = [line(entries[mid])];
-  let size = picked[0].length, lo = mid - 1, hi = mid + 1;
-  while (lo >= 0 || hi < entries.length) {
-    let added = false;
-    for (const side of ['hi', 'lo']) {
-      const idx = side === 'hi' ? hi : lo;
-      if (idx < 0 || idx >= entries.length) continue;
-      const l = line(entries[idx]);
-      if (size + l.length + 1 > maxChars) continue;
-      if (side === 'hi') { picked.push(l); hi++; } else { picked.unshift(l); lo--; }
-      size += l.length + 1;
-      added = true;
-    }
-    if (!added) break;
+// Transcript window for a question: every line overlapping
+// [currentTime - halfSec, currentTime + halfSec], as "[m:ss] text" lines.
+// Near the start or end of the video the window is simply clipped (not
+// shifted). If it is longer than maxChars, lines farthest from currentTime
+// are dropped first. Returns '' when nothing overlaps.
+function buildWindow(entries, currentTime, opts = {}) {
+  const halfSec = opts.halfSec === undefined ? QUESTION_WINDOW_SECONDS : opts.halfSec;
+  const maxChars = opts.maxChars === undefined ? WINDOW_MAX_CHARS : opts.maxChars;
+  const t = Number(currentTime) || 0;
+  const picked = (entries || []).filter((e) =>
+    Math.max(e.endSec, e.startSec) >= t - halfSec && e.startSec <= t + halfSec);
+  const lines = picked.map(line);
+  let size = lines.reduce((n, l) => n + l.length + 1, 0) - 1;
+  const dist = (e) => Math.abs((e.startSec + Math.max(e.endSec, e.startSec)) / 2 - t);
+  while (size > maxChars && lines.length > 1) {
+    const dropFirst = dist(picked[0]) > dist(picked[picked.length - 1]);
+    const removed = dropFirst ? (picked.shift(), lines.shift()) : (picked.pop(), lines.pop());
+    size -= removed.length + 1;
   }
-  return picked.join('\n');
+  if (lines.length === 1 && lines[0].length > maxChars) lines[0] = lines[0].slice(0, maxChars);
+  return lines.join('\n');
 }
 
 function segmentText(entries, seg) {
-  return entries.filter((e) => segmentOf(e.start) === seg).map((e) => e.text).join(' ');
+  return entries.filter((e) => segmentOf(e.startSec) === seg).map((e) => e.text).join(' ');
 }
 
 // ---- main (browser only) ----------------------------------------------------
@@ -336,13 +339,16 @@ function main() {
 
   async function ask(question, excerpt, opts = {}) {
     if (state.busy) return;
+    if (!excerpt || !excerpt.trim()) return; // never send GPT an empty transcript
     const gen = state.gen;
+    const video = getVideo();
     const msg = {
       type: 'ask',
       requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       question,
-      transcript: excerpt,
-      history: state.history.slice(-HISTORY_SENT),
+      windowText: excerpt,
+      currentTime: video ? video.currentTime : 0,
+      history: state.history.slice(-MAX_TURNS * 2),
     };
     if (opts.devFail) msg.devFail = opts.devFail;
     const retry = () => ask(question, excerpt, Object.assign({}, opts, { devFail: undefined }));
@@ -361,7 +367,7 @@ function main() {
           { role: 'user', content: opts.historyText || question },
           { role: 'assistant', content: res.text },
         );
-        state.history = state.history.slice(-HISTORY_KEPT);
+        state.history = state.history.slice(-MAX_TURNS * 2);
       } else {
         ui.showError((res && (ERRORS_BY_CODE[res.code] || res.error)) || 'Unknown error.', retry);
       }
@@ -383,14 +389,16 @@ function main() {
     const m = DEV && /^\/fail\s+(drop|hang)\s*(.*)$/i.exec(text);
     if (m) { devFail = m[1].toLowerCase(); text = m[2] || 'Summarize this part of the video.'; }
     const tr = state.transcript;
-    if (!tr || tr.status !== 'ok') {
-      ui.showError(tr && tr.message ? tr.message : 'The transcript is still loading.');
-      return;
-    }
+    if (!tr || tr.status !== 'ok') return; // input is disabled in this state anyway
     const video = getVideo();
     const t = video ? video.currentTime : 0;
+    const windowText = buildWindow(tr.entries, t);
+    if (!windowText) {
+      ui.showError(`Nothing is said within ${QUESTION_WINDOW_SECONDS}s of ${fmtTime(t)}, so there's no transcript to ask about. Move to a part with speech.`);
+      return;
+    }
     ui.input.value = '';
-    ask(text, centeredWindow(tr.entries, t, QUESTION_WINDOW_CHARS), { devFail });
+    ask(text, windowText, { devFail });
   }
 
   // ---- suggestions ----
@@ -449,9 +457,11 @@ function main() {
     if (gen !== state.gen) return;
     state.transcript = tr;
     if (tr.status === 'ok') {
+      ui.setAskEnabled(true);
       ui.setStatus(`Transcript loaded (${tr.entries.length} lines). Pause the video or ask a question.`);
       renderSuggestions();
     } else {
+      ui.setAskEnabled(false, tr.status === 'none' ? 'No captions: asking is off' : 'No transcript: asking is off');
       ui.setStatus(tr.message, true);
     }
   }
@@ -510,6 +520,8 @@ function main() {
     const box = $('.box'), status = $('.status'), answer = $('.answer'), errBox = $('.error'),
       errMsg = $('.msg'), retryBtn = $('.retry'), sugg = $('.sugg'), input = $('input'), askBtn = $('.ask');
     let retryFn = null;
+    let askAllowed = false; // true only once a transcript is loaded
+    const PLACEHOLDER = 'Ask about this video...';
 
     // Keep YouTube's keyboard shortcuts (k, j, l, f, space...) from firing while typing.
     for (const type of ['keydown', 'keyup', 'keypress']) {
@@ -531,9 +543,13 @@ function main() {
       show() { host.style.display = ''; },
       hide() { host.style.display = 'none'; },
       setStatus(text, warn) { status.textContent = text; status.classList.toggle('warn', !!warn); },
+      setAskEnabled(enabled, placeholder) {
+        askAllowed = enabled;
+        input.disabled = askBtn.disabled = !enabled || state.busy;
+        input.placeholder = enabled ? PLACEHOLDER : (placeholder || 'Loading transcript…');
+      },
       setBusy(busy, label) {
-        input.disabled = busy;
-        askBtn.disabled = busy;
+        input.disabled = askBtn.disabled = busy || !askAllowed;
         for (const b of sugg.querySelectorAll('button')) b.disabled = busy;
         if (busy) {
           status.textContent = '';
@@ -570,8 +586,7 @@ function main() {
         api.setSuggestions([]);
         api.setStatus('');
         input.value = '';
-        input.disabled = false;
-        askBtn.disabled = false;
+        api.setAskEnabled(false, 'Loading transcript…');
       },
     };
     return api;
@@ -581,7 +596,7 @@ function main() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     sendWithRetry, isRetryable, withTimeout, extractJsonObject, parseJson3, pickTrack,
-    fmtTime, segmentOf, windowAround, centeredWindow, segmentText,
+    fmtTime, segmentOf, windowAround, buildWindow, segmentText,
   };
 } else if (typeof window !== 'undefined' && !window.__miniTubeAiLoaded) {
   window.__miniTubeAiLoaded = true;

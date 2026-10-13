@@ -20,11 +20,14 @@ const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 const SYSTEM_PROMPT =
   'You are mini TubeAI, a study assistant for the YouTube video the user is watching. ' +
-  'Use the transcript excerpt as your main source. Timestamps are [m:ss]. ' +
-  'If the excerpt does not cover the question, say so briefly before answering from general knowledge. ' +
+  'You get a transcript excerpt from around the current playback time; timestamps are [m:ss]. ' +
+  'Answer using that excerpt. If the answer is not in the excerpt, say so plainly ' +
+  '(for example "The excerpt around 4:10 doesn\'t cover that."). Do not make up what the video says. ' +
+  'After saying so, you may add a short general answer, clearly labelled as not from the video. ' +
   'Be concise and plain-spoken.';
 
 const ERROR_TEXT = {
+  no_transcript: 'No transcript text to send, so the question was not sent.',
   missing_key: 'No OpenAI API key saved. Open the extension popup and add one.',
   unauthorized: 'OpenAI rejected the API key (401). Check the key in the extension popup.',
   rate_limited: 'OpenAI rate limit or quota reached (429). Wait a moment and retry.',
@@ -44,19 +47,27 @@ function clip(text, max) {
   return s.length > max ? s.slice(0, max) + ' …[truncated]' : s;
 }
 
-// { question, transcript, history } -> OpenAI messages array
-function buildMessages({ question, transcript, history } = {}) {
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const ss = String(s).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+// { question, windowText, currentTime, history } -> OpenAI messages array
+function buildMessages({ question, windowText, currentTime, history } = {}) {
   const turns = (Array.isArray(history) ? history : [])
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
     .slice(-MAX_HISTORY_MESSAGES)
     .map((m) => ({ role: m.role, content: clip(m.content, MAX_MESSAGE_CHARS) }));
-  const excerpt = transcript ? clip(transcript, MAX_TRANSCRIPT_CHARS) : '(no transcript available)';
+  const excerpt = clip(windowText, MAX_TRANSCRIPT_CHARS);
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     ...turns,
     {
       role: 'user',
-      content: `Transcript excerpt:\n${excerpt}\n\nQuestion: ${clip(question, MAX_MESSAGE_CHARS)}`,
+      content: `I'm at ${fmtTime(currentTime)} in the video.\n\n` +
+        `Transcript excerpt:\n${excerpt}\n\nQuestion: ${clip(question, MAX_MESSAGE_CHARS)}`,
     },
   ];
 }
@@ -67,6 +78,9 @@ async function handleAsk(msg, deps = {}) {
   const fetchFn = deps.fetchFn || fetch;
   const storageGet = deps.storageGet || ((keys) => chrome.storage.local.get(keys));
   const timeoutMs = deps.timeoutMs || OPENAI_TIMEOUT_MS;
+
+  // Never send GPT an empty transcript (content.js checks too).
+  if (!msg || typeof msg.windowText !== 'string' || !msg.windowText.trim()) return fail('no_transcript');
 
   const stored = (await storageGet(['openaiApiKey', 'model'])) || {};
   const configKey = 'configKey' in deps ? deps.configKey : globalThis.MINI_TUBEAI_API_KEY;

@@ -12,7 +12,8 @@ const jsonResponse = (status, body) => ({
 });
 const msg = {
   question: 'What is a monad?',
-  transcript: '[0:01] hello',
+  windowText: '[0:01] hello',
+  currentTime: 65,
   history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
 };
 
@@ -30,7 +31,8 @@ test('success returns {ok:true,text} and sends key, model and messages', async (
   assert.equal(body.model, 'gpt-4');
   assert.equal(body.messages[0].role, 'system');
   assert.equal(body.messages.length, 4); // system + 2 history + question
-  assert.match(body.messages[3].content, /\[0:01\] hello[\s\S]*What is a monad\?/);
+  assert.match(body.messages[3].content, /I'm at 1:05[\s\S]*\[0:01\] hello[\s\S]*What is a monad\?/);
+  assert.match(body.messages[0].content, /say so plainly/);
 });
 
 test('model can be overridden from storage', async () => {
@@ -113,7 +115,7 @@ test('key is re-read from storage on every request', async () => {
 test('buildMessages caps transcript and history', () => {
   const history = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
   history.push({ role: 'system', content: 'injected' });
-  const out = buildMessages({ question: 'q', transcript: 'x'.repeat(MAX_TRANSCRIPT_CHARS + 500), history });
+  const out = buildMessages({ question: 'q', windowText: 'x'.repeat(MAX_TRANSCRIPT_CHARS + 500), history });
   assert.equal(out.length, 1 + 6 + 1);
   assert.ok(!out.some((m) => m.content === 'injected'));
   assert.deepEqual(out.slice(1, 7).map((m) => m.content), ['m4', 'm5', 'm6', 'm7', 'm8', 'm9']);
@@ -157,4 +159,14 @@ test('config.js key is used when no popup key is saved; popup key wins', async (
   assert.deepEqual(seen, ['Bearer sk-config', 'Bearer sk-test']);
   const res = await handleAsk(msg, { fetchFn, storageGet: storage({}), configKey: '  ' });
   assert.equal(res.code, 'missing_key');
+});
+
+test('empty or missing windowText -> no_transcript, nothing sent', async () => {
+  let called = false;
+  const fetchFn = async () => { called = true; };
+  for (const windowText of ['', '   \n', undefined]) {
+    const res = await handleAsk({ ...msg, windowText }, { fetchFn, storageGet: storage(KEY) });
+    assert.equal(res.code, 'no_transcript');
+  }
+  assert.equal(called, false);
 });

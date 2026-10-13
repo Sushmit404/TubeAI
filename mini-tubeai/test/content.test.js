@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  sendWithRetry, extractJsonObject, parseJson3, pickTrack, centeredWindow, windowAround, fmtTime,
+  sendWithRetry, extractJsonObject, parseJson3, pickTrack, windowAround, fmtTime,
 } = require('../content.js');
 
 const portClosed = () => new Error('The message port closed before a response was received.');
@@ -85,8 +85,8 @@ test('parseJson3 and pickTrack', () => {
     ],
   });
   assert.deepEqual(entries, [
-    { start: 0, dur: 2, text: 'Hello world' },
-    { start: 61, dur: 1, text: 'later' },
+    { startSec: 0, endSec: 2, text: 'Hello world' },
+    { startSec: 61, endSec: 62, text: 'later' },
   ]);
   const tracks = [
     { languageCode: 'de' },
@@ -98,13 +98,10 @@ test('parseJson3 and pickTrack', () => {
   assert.equal(pickTrack([]), null);
 });
 
-test('transcript windows', () => {
-  const entries = Array.from({ length: 100 }, (_, i) => ({ start: i * 10, text: `line${i}` }));
+test('windowAround (pause excerpt) and fmtTime', () => {
+  const entries = Array.from({ length: 100 }, (_, i) => ({ startSec: i * 10, endSec: i * 10 + 10, text: `line${i}` }));
   const w = windowAround(entries, 300, 60).split('\n');
   assert.equal(w.length, 13); // 240..360
   assert.equal(w[0], '[4:00] line24');
-  const c = centeredWindow(entries, 500, 60);
-  assert.ok(c.length <= 60);
-  assert.ok(c.includes('line50'));
   assert.equal(fmtTime(3725), '1:02:05');
 });
