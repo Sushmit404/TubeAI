@@ -145,3 +145,16 @@ test('lockStorage reports unsupported / rejected / ok', async () => {
     Object.assign(console, quiet);
   }
 });
+
+test('config.js key is used when no popup key is saved; popup key wins', async () => {
+  const seen = [];
+  const fetchFn = async (url, init) => {
+    seen.push(init.headers.Authorization);
+    return jsonResponse(200, { choices: [{ message: { content: 'x' } }] });
+  };
+  await handleAsk(msg, { fetchFn, storageGet: storage({}), configKey: 'sk-config' });
+  await handleAsk(msg, { fetchFn, storageGet: storage(KEY), configKey: 'sk-config' });
+  assert.deepEqual(seen, ['Bearer sk-config', 'Bearer sk-test']);
+  const res = await handleAsk(msg, { fetchFn, storageGet: storage({}), configKey: '  ' });
+  assert.equal(res.code, 'missing_key');
+});

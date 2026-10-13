@@ -3,6 +3,12 @@
 // chrome.storage (content scripts go through messages, so they keep working
 // even when storage.local is locked to trusted contexts).
 
+// Optional, gitignored config.js can set self.MINI_TUBEAI_API_KEY (see
+// config.example.js). A key saved in the popup takes precedence.
+if (typeof importScripts === 'function') {
+  try { importScripts('config.js'); } catch { /* no config.js: use the popup key */ }
+}
+
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4'; // override: chrome.storage.local.set({ model: '...' })
 const OPENAI_TIMEOUT_MS = 30000;
@@ -63,7 +69,10 @@ async function handleAsk(msg, deps = {}) {
   const timeoutMs = deps.timeoutMs || OPENAI_TIMEOUT_MS;
 
   const stored = (await storageGet(['openaiApiKey', 'model'])) || {};
-  const apiKey = typeof stored.openaiApiKey === 'string' ? stored.openaiApiKey.trim() : '';
+  const configKey = 'configKey' in deps ? deps.configKey : globalThis.MINI_TUBEAI_API_KEY;
+  const apiKey = [stored.openaiApiKey, configKey]
+    .map((k) => (typeof k === 'string' ? k.trim() : ''))
+    .find(Boolean) || '';
   if (!apiKey) return fail('missing_key');
   const model = (typeof stored.model === 'string' && stored.model.trim()) || DEFAULT_MODEL;
 

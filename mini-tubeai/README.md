@@ -17,6 +17,11 @@ See [PLAN.md](PLAN.md) for the architecture and every default it uses.
 4. Open a YouTube video that has captions. If the tab was already open,
    reload it first. The panel appears at the bottom right.
 
+**Alternative: put the key in a file.** Copy `config.example.js` to
+`config.js` and paste your key into it. `config.js` is gitignored. A key saved
+in the popup takes precedence over it. Once `config.js` holds a key, don't
+share the folder or zip it for anyone: the key is plain text.
+
 After you change any file, click the reload icon on the extension card and
 then **refresh the YouTube tab**. Chrome doesn't re-inject content scripts
 into tabs that are already open.
@@ -106,8 +111,9 @@ If the video has no captions, the panel says so and doesn't call OpenAI.
   the key stays readable by this extension's content scripts. Pages on
   youtube.com still can't read it either way. The content script never reads
   storage, so behavior is the same in both cases.
-- **The key is stored in plain text** in the extension's profile storage.
-  Anyone with access to your Chrome profile on disk can read it.
+- **The key is stored in plain text** in the extension's profile storage, or
+  in `config.js` if you use that. Anyone with access to your Chrome profile
+  or the extension folder can read it.
 - **Transcript fetching may break.** YouTube sometimes requires an extra token
   on timedtext requests and returns an empty body without it. When that
   happens the panel shows "Captions exist, but YouTube returned an empty
