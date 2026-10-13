@@ -203,6 +203,13 @@ function route(msg) {
     case 'addStats':
       if (!VIDEO_ID_RE.test(msg.videoId)) return Promise.resolve({ ok: false, error: 'bad videoId' });
       return addStats(msg.videoId, msg.deltas);
+    case 'keyStatus':
+      return chrome.storage.local.get('openaiApiKey').then(({ openaiApiKey }) => ({
+        ok: true,
+        source: (openaiApiKey && openaiApiKey.trim()) ? 'popup'
+          : (typeof self.MINI_TUBEAI_API_KEY === 'string' && self.MINI_TUBEAI_API_KEY.trim()) ? 'config'
+          : 'none',
+      }));
     case 'getStats':
       if (!VIDEO_ID_RE.test(msg.videoId)) return Promise.resolve({ ok: false, error: 'bad videoId' });
       return getStats(msg.videoId);

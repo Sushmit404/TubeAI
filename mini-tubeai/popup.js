@@ -3,9 +3,15 @@
 const keyInput = document.getElementById('key');
 const status = document.getElementById('status');
 
-chrome.storage.local.get('openaiApiKey').then(({ openaiApiKey }) => {
-  if (openaiApiKey) keyInput.placeholder = 'Key saved (hidden). Paste to replace.';
-});
+// Ask the background which key it will use (it can see config.js; we can't).
+chrome.runtime.sendMessage({ type: 'keyStatus' }).then((res) => {
+  const source = res && res.source;
+  if (source === 'popup') keyInput.placeholder = 'Key saved (hidden). Paste to replace.';
+  else if (source === 'config') {
+    keyInput.placeholder = 'Paste a key to override config.js';
+    status.textContent = 'Using key from config.js ✓';
+  }
+}).catch(() => {});
 
 document.getElementById('save').addEventListener('click', async () => {
   const key = keyInput.value.trim();
