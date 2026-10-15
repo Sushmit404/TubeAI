@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>mini TubeAI</title>
+  <style>
+    body { width: 280px; margin: 0; padding: 12px; font: 13px/1.4 system-ui, sans-serif; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 8px; }
+    #status { margin-left: 8px; color: #188038; }
+    #status.err { color: #c5221f; }
+  </style>
+</head>
+<body>
+  <label for="key">OpenAI API key</label>
+  <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+  <button id="save">Save</button><span id="status" role="status"></span>
+  <script src="popup.js"></script>
+</body>
+</html>

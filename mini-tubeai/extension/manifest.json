@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "mini TubeAI",
+  "version": "0.2.0",
+  "description": "Ask questions about the YouTube video you're watching, answered by your local mini TubeAI server.",
+  "minimum_chrome_version": "102",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1CXs6wdw2gmnDrA1up26Oe4mfUSI1zNHRu0jLUqD8+SBqGGveVSSrFQ0mQsQqQQG/qaWg89U82msu0klsARZt+iY68FBd5FP3BOKtKUOqmCAOysbpoFNXYS9CDymy0B8lPF4bA6ViHxlDitUUNcSbMNfXm3RPuh9yI9gkXl84bQCTD/Ya2CoggRJaxxvqcM2NNXpq2BcRGbhuojvdmFA7k5JXWAy4YofCOKPfTyvw0obCs+gyUeq9xBrNq3zu8Lcc47zQAKhNOZ6ELbVlOplUNAodMBSCzjASM3oLHCp+hwG5q+LLkO/R7gVAbKh1lXkxuL8ewN4TcQ3SRzOxjaFKQIDAQAB",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "https://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "mini TubeAI",
+    "default_popup": "popup.html"
+  }
+}

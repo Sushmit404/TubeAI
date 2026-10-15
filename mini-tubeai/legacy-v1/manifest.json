@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "mini TubeAI",
+  "version": "0.1.0",
+  "description": "Ask questions about the YouTube video you're watching, get explanations when you pause.",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["rank.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "mini TubeAI",
+    "default_popup": "popup.html"
+  }
+}
