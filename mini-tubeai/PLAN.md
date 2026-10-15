@@ -1,70 +1,108 @@
 # mini TubeAI — plan
 
+A Chrome extension for YouTube backed by a local Python server. The server
+splits each video's captions into chunks, stores them in a vector database
+(LanceDB), finds the chunks relevant to a question, and asks OpenAI. The
+extension never sees the OpenAI key.
+
+```
+ YouTube tab                               your machine only
+┌──────────────────────────┐   chrome     ┌──────────────────┐   HTTP+JSON    ┌────────────────────────┐
+│ content.js               │  messages    │ background.js    │  127.0.0.1:8000│ server (FastAPI)       │
+│  overlay, captions,      │ ───────────► │  only caller of  │ ─────────────► │  /health /ingest /ask  │
+│  <video> tracking, rank  │ ◄─────────── │  the server      │ ◄───────────── │  X-Tube-Token required │
+└──────────────────────────┘              └──────────────────┘                └───────┬────────┬───────┘
+ popup.html: paste token once → chrome.storage.local                          LanceDB │        │ OpenAI
+                                                                              (files) ▼        ▼ (embeddings, chat)
+```
+
 ## File layout
 
 ```
 mini-tubeai/
-  manifest.json      MV3; storage + 2 host permissions; content script on /watch*
-  background.js      service worker: the only OpenAI caller, the only storage user
-  content.js         overlay, transcript loading, <video> tracking, sendWithRetry()
-  rank.js            getTopTopics(stats, n=4); loaded before content.js
-  popup.html/.js     API key field + Save + "Saved ✓"
-  test/*.test.js     node --test, no dependencies
-  package.json       only holds `npm test`; nothing to install
+  PLAN.md  README.md
+  extension/                    load this folder unpacked
+    manifest.json               MV3; storage; 127.0.0.1:8000 + youtube.com; fixed "key" → fixed ID
+    background.js               the ONLY extension code that calls the server
+    content.js                  overlay, captions, ingest trigger, pause/quiz, tracking (stage 4)
+    rank.js                     getTopTopics(stats, n=4)            (stage 4)
+    popup.html, popup.js        token field + Save + "Saved"
+    package.json                only `npm test`
+    test/*.test.js              node --test
+  server/
+    .env.example                OPENAI_API_KEY=...  (copy to .env, gitignored)
+    requirements.txt
+    tubeai/
+      config.py                 every tunable as a named constant
+      __main__.py               `python -m tubeai`: prints token, runs uvicorn on 127.0.0.1:8000
+      main.py                   create_app(): routes, CORS, auth
+      auth.py                   token create/load + X-Tube-Token check
+      chunker.py                segments → overlapping chunks        (stage 2)
+      store.py                  LanceDB tables: chunks, videos       (stage 2)
+      llm.py                    OpenAI embeddings + chat, usage log  (stage 2–3)
+      rag.py                    retrieval + prompt building          (stage 3)
+    tests/                      pytest
+    data/                       token.txt + lancedb/  (gitignored, created at first start)
+  legacy-v1/                    the earlier extension-only version, kept for reference
 ```
 
-Every file is plain JavaScript. There's no build step and no `.env`. Shared
-files end with `if (typeof module !== 'undefined') module.exports = …`, so
-Node can `require()` them while Chrome loads them as classic scripts.
+## Data flow for one question (after stage 3)
 
-## Data flow for one typed question
+1. **Typing:** you type "why does he use a mutex here?" in the overlay at 7:42.
+2. **content.js → background.js:** `content.js` sends `{type:'ask', videoId, question, currentTime: 462, history}`
+   through `sendWithRetry()`, which allows 35s per attempt and retries once if
+   the port closes or the reply times out. The input is locked while it waits.
+3. **background.js → server:** `background.js` reads the token from
+   `chrome.storage.local` (fresh for every request) and POSTs to
+   `http://127.0.0.1:8000/ask` with the `X-Tube-Token` header.
+4. **Server checks:**
+   - **Token:** it checks the token in constant time. Missing or wrong → 401.
+   - **CORS:** only `chrome-extension://<our id>` is allowed.
+5. **Retrieval** (`rag.py`):
+   1. Embed the question with `text-embedding-3-small`.
+   2. Ask LanceDB for the 5 nearest chunks where `videoId = …`.
+   3. Add the chunk that contains 462s, drop duplicates and sort by time.
+   4. Load the video's stored summary.
+6. **Prompt:**
+   - instructions: answer only from the excerpts, say so when it isn't
+     there, cite `[m:ss]` timestamps, and remember you only see captions;
+   - the summary;
+   - the chunks, each labelled `[m:ss–m:ss]`;
+   - the last 4 history turns;
+   - the question.
+7. **OpenAI call:** chat completion with `CHAT_MODEL`, a 30s timeout, and at
+   most 500 output tokens. The token `usage` is logged.
+8. **Reply:** `{answer, sources:[{startSec,endSec}]}`, from server to worker to
+   content script.
+9. **Display:** the overlay shows the answer and the sources as clickable
+   `[7:30–8:30]` chips that seek the video. History gets the new turn.
 
-1. The user types into the overlay and presses Enter. `content.js` reads
-   `video.currentTime` and builds a window of every transcript line within
-   ±60s of it, as `[m:ss] text`. If that's over 6,000 characters, the lines
-   farthest from the current time are dropped first. An empty window is
-   never sent.
-2. It sends `{type:'ask', requestId, question, windowText, currentTime, history}`, with history capped at 3 turns,
-   to the background through `sendWithRetry()`, which allows 35s and retries
-   once if the port closes or the reply times out. The input and Ask button
-   are locked while it waits.
-3. `background.js` reads `openaiApiKey` and the optional `model` from
-   `chrome.storage.local`, fresh for each request. It builds the messages
-   (system prompt, up to 6 history messages, then the excerpt plus the
-   question), caps their length again, and POSTs to `/v1/chat/completions`
-   with a 30s timeout through `AbortController`.
-4. The background replies `{ok:true,text}`, or `{ok:false,code,error}` where
-   `code` is one of `missing_key`, `unauthorized`, `rate_limited`, `network`,
-   `timeout`, `http_error` or `bad_response`.
-5. On success, the content script puts the answer into the overlay with
-   `textContent` and adds the turn to that video's in-memory history. On
-   failure it shows the error and a Retry button. In both cases it unlocks
-   the input in a `finally` block.
-
-Clicking a suggestion and a settled pause both go through the same `ask()`.
+Ingest happens once per video, before the first question: `content.js` gets
+the captions and sends `{type:'ingest', videoId, segments}`. The server
+answers `{status:'exists'}` right away if it has the video. Otherwise it
+chunks the captions, embeds them in batches, stores them, writes a summary,
+and returns `{status:'ingested', chunks:n}`.
 
 ## Defaults I chose
 
-| Area | Default |
-|---|---|
-| Location | `mini-tubeai/` folder; the old TubeAI files are left alone |
-| Model | `gpt-4`. Override it from the service worker console: `chrome.storage.local.set({model:'gpt-4o-mini'})` |
-| OpenAI params | temperature 0.3, max_tokens 600 |
-| Transcript entries | `{startSec, endSec, text}`; `endSec` = start + caption duration |
-| Question window | ±60s around `video.currentTime`, clipped (not shifted) at the start and end of the video, capped at 6,000 chars. The background also caps it at 12,000 |
-| No captions or transcript failed | Message in the overlay, input and Ask button disabled. The background also refuses an empty `windowText` (`no_transcript`) |
-| History | 3 turns (6 messages) kept per video in memory, all sent; each capped at 2,000 chars |
-| System prompt | Answer from the excerpt; if it isn't there, say so plainly, then optionally give a short general answer labelled as not from the video |
-| Transcript source | Inline `<script>` on first load; otherwise fetch the `/watch?v=ID` HTML and parse `ytInitialPlayerResponse` |
-| Caption track | Manual English, then auto-generated English, then any manual track, then the first track |
-| Segments | 30s, indexed by `floor(t/30)` |
-| Pause | Counted after it lasts 800ms (debounced); ignored during ads and at video end |
-| Auto-explain | On every debounced pause, unless a request is already running or there's no transcript. Window is ±60s. Controlled by the `AUTO_EXPLAIN_ON_PAUSE` constant |
-| Replay | Backward seek of more than 1s into a segment watched **this session**. A repeat for the same segment within 2s is ignored |
-| watchTime | Media seconds while playing. Gaps over 1.5s between `timeupdate` events are ignored as seeks. Ads are excluded |
-| Stats writes | Batched deltas sent to the background every 10s, on pause, when the tab is hidden, and on navigation. Never retried, to avoid double counting |
-| Storage keys | `openaiApiKey`, `model`, `stats:<videoId>`, `suggestionClicks` (last 1,000) |
-| Content script and storage | The content script never touches `chrome.storage`; it sends messages to the background instead. This keeps working whether or not `setAccessLevel` locks it out |
-| Dev failure | Unpacked builds only. Type `/fail drop <q>` (no reply, so "port closed") or `/fail hang <q>` (never replies, so 35s timeout). Each fails once per requestId, so the retry succeeds |
-| Overlay | Closed shadow DOM, fixed bottom-right, collapsible. Typing in it doesn't trigger YouTube's keyboard shortcuts |
-| Suggestions | Top 4 segments by score. Segments that score 0 are hidden. Ties go to the earlier segment |
+| Area | Default | Why |
+|---|---|---|
+| Layout | `mini-tubeai/extension` + `mini-tubeai/server`; the old version moved to `legacy-v1/` | It wasn't deleted, because it holds your local `config.js` |
+| Extension ID | Fixed with a `key` in the manifest: `eclaebfeenkjabmcnnogpckkahoppkpn` | CORS can name the exact origin; can be overridden with `TUBE_EXTENSION_ID` in `.env` |
+| Bind | `127.0.0.1:8000`, set in code, not configurable from the command line | Never reachable from the network |
+| Token | 32 random bytes (urlsafe) in `server/data/token.txt`, made on first start, printed on every start | Printed every time so you can find it again |
+| `/health` | **No token needed**; returns only `{ok, version}` | The extension can tell "server down" from "bad token" |
+| Every other route | Token needed; 401 if missing or wrong | |
+| CORS | `allow_origins=[chrome-extension://<id>]`, methods GET/POST, headers Content-Type and X-Tube-Token | |
+| Worker → server timeout | 32s | Above the server's 30s OpenAI timeout, below the content script's 35s |
+| Config | `server/tubeai/config.py`: `CHUNK_SECONDS=60`, `CHUNK_OVERLAP_SECONDS=10`, `TOP_K=5`, `MAX_HISTORY_TURNS=4`, `MAX_OUTPUT_TOKENS=500`, `EMBEDDING_MODEL=text-embedding-3-small`, `CHAT_MODEL=gpt-4` (or `TUBE_CHAT_MODEL` in `.env`) | Untuned guesses, as the file says |
+| Embedding batches | 100 chunks per request | |
+| Summary | One chat call at ingest; long videos are trimmed to the first ~12k chars plus evenly spaced samples | Keeps the call cheap; noted as a weakness |
+| LanceDB | Tables `chunks` (`videoId`, `startSec`, `endSec`, `text`, `vector`) and `videos` (`videoId`, `title`, `summary`, `ingestedAt`) | |
+| Concurrency | A per-video lock so two tabs don't ingest the same video at once | |
+| Captions | Read from HTML (see README). Track order: manual English, auto English, any manual, first | |
+| Pause | Debounced 800ms; explanation + 2-question quiz about the chunk at that moment | |
+| History | Content-script memory, per video; the last 4 turns are sent | |
+| Stats | `stats:<videoId>` in `chrome.storage.local`; an LRU index keeps the last 50 videos | |
+| Dev failure | Unpacked builds only. Type `/fail drop <q>` or `/fail hang <q>`; it fails once per requestId | |
+| Tests | Server: pytest, with fake embeddings and a mocked OpenAI. Extension: `node --test`, no dependencies | |

@@ -1,0 +1,9 @@
+{
+  "name": "mini-tubeai-extension",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Tests only. The extension itself needs no build step.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
